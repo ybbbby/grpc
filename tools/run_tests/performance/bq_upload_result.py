@@ -180,8 +180,8 @@ def _populate_node_metadata_from_file(scenario_result, node_info_file):
             'nodeName':serverNodeInfo['NodeName']
         })
     print(node_metadata)
-    print(scenario_result)
     scenario_result['nodeMetadata'] = node_metadata
+    print(scenario_result)
 
 
 argp = argparse.ArgumentParser(description='Upload result to big query.')

@@ -1941,7 +1941,12 @@
         "mode": "REPEATED", 
         "name": "servers", 
         "type": "RECORD"
-      }, 
+      },
+      {
+        "mode": "NULLABLE",
+        "name": "testMetadata",
+        "type": "STRING"
+      },
       {
         "fields": [
           {
