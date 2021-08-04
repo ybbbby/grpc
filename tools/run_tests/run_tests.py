@@ -34,16 +34,18 @@ import socket
 import subprocess
 import sys
 import tempfile
-import traceback
 import time
-from six.moves import urllib
+import traceback
 import uuid
+
 import six
+from six.moves import urllib
 
 import python_utils.jobset as jobset
 import python_utils.report_utils as report_utils
-import python_utils.watch_dirs as watch_dirs
 import python_utils.start_port_server as start_port_server
+import python_utils.watch_dirs as watch_dirs
+
 try:
     from python_utils.upload_test_results import upload_results_to_bq
 except (ImportError):
@@ -485,6 +487,10 @@ class CLanguage(object):
             return ('ubuntu1804', [])
         elif compiler == 'gcc8.3':
             return ('buster', [])
+        elif compiler == 'gcc8.3_openssl102':
+            return ('buster_openssl102', [
+                "-DgRPC_SSL_PROVIDER=package",
+            ])
         elif compiler == 'gcc_musl':
             return ('alpine', [])
         elif compiler == 'clang4.0':
@@ -771,6 +777,11 @@ class PythonLanguage(object):
                                                    minor='8',
                                                    bits=bits,
                                                    config_vars=config_vars)
+        python39_config = _python_config_generator(name='py39',
+                                                   major='3',
+                                                   minor='9',
+                                                   bits=bits,
+                                                   config_vars=config_vars)
         pypy27_config = _pypy_config_generator(name='pypy',
                                                major='2',
                                                config_vars=config_vars)
@@ -800,13 +811,9 @@ class PythonLanguage(object):
                     # NOTE(rbellevi): Testing takes significantly longer on
                     # MacOS, so we restrict the number of interpreter versions
                     # tested.
-                    return (
-                        python27_config,
-                        python38_config,
-                    )
+                    return (python38_config,)
                 else:
                     return (
-                        python27_config,
                         python35_config,
                         python37_config,
                         python38_config,
@@ -821,6 +828,8 @@ class PythonLanguage(object):
             return (python37_config,)
         elif args.compiler == 'python3.8':
             return (python38_config,)
+        elif args.compiler == 'python3.9':
+            return (python39_config,)
         elif args.compiler == 'pypy':
             return (pypy27_config,)
         elif args.compiler == 'pypy3':
@@ -922,7 +931,7 @@ class CSharpLanguage(object):
             self._cmake_arch_option = 'x64'
         else:
             _check_compiler(self.args.compiler, ['default', 'coreclr'])
-            self._docker_distro = 'stretch'
+            self._docker_distro = 'buster'
 
     def test_specs(self):
         with open('src/csharp/tests.json') as f:
@@ -1429,6 +1438,7 @@ argp.add_argument(
         'gcc5.3',
         'gcc7.4',
         'gcc8.3',
+        'gcc8.3_openssl102',
         'gcc_musl',
         'clang4.0',
         'clang5.0',

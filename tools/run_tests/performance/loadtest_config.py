@@ -26,18 +26,16 @@ import collections
 import copy
 import datetime
 import itertools
+import json
 import os
 import string
 import sys
-import uuid
-
 from typing import Any, Dict, Iterable, Mapping, Optional, Type
-
-import json
-import yaml
+import uuid
 
 import scenario_config
 import scenario_config_exporter
+import yaml
 
 CONFIGURATION_FILE_HEADER_COMMENT = """
 # Load test configurations generated from a template by loadtest_config.py.
@@ -46,11 +44,9 @@ CONFIGURATION_FILE_HEADER_COMMENT = """
 """
 
 
-def label_language(language: str) -> str:
-    """Convert scenario language to place in a resource label."""
-    return {
-        'c++': 'cxx',
-    }.get(language, language)
+def safe_name(language: str) -> str:
+    """Returns a name that is safe to use in labels and file names."""
+    return scenario_config.LANGUAGES[language].safename
 
 
 def default_prefix() -> str:
@@ -65,8 +61,13 @@ def now_string() -> str:
 
 def validate_loadtest_name(name: str) -> None:
     """Validates that a LoadTest name is in the expected format."""
-    if not all((s.isalnum() for s in name.split('-'))):
-        raise ValueError('Invalid elements in LoadTest name: %s' % name)
+    if len(name) > 253:
+        raise ValueError(
+            'LoadTest name must be less than 253 characters long: %s' % name)
+    if not all(c.isalnum() and not c.isupper() for c in name if c != '-'):
+        raise ValueError('Invalid characters in LoadTest name: %s' % name)
+    if not name or not name[0].isalpha() or name[-1] == '-':
+        raise ValueError('Invalid format for LoadTest name: %s' % name)
 
 
 def loadtest_base_name(scenario_name: str,
@@ -74,7 +75,7 @@ def loadtest_base_name(scenario_name: str,
     """Constructs and returns the base name for a LoadTest resource."""
     name_elements = scenario_name.split('_')
     name_elements.extend(uniquifier_elements)
-    return '-'.join(name_elements)
+    return '-'.join(element.lower() for element in name_elements)
 
 
 def loadtest_name(prefix: str, scenario_name: str,
@@ -133,10 +134,8 @@ def gen_loadtest_configs(
     """
     validate_annotations(annotations)
     prefix = loadtest_name_prefix or default_prefix()
-    cl = label_language(language_config.client_language or
-                        language_config.language)
-    sl = label_language(language_config.server_language or
-                        language_config.language)
+    cl = safe_name(language_config.client_language or language_config.language)
+    sl = safe_name(language_config.server_language or language_config.language)
     scenario_filter = scenario_config_exporter.scenario_filter(
         scenario_name_regex=scenario_name_regex,
         category=language_config.category,
@@ -159,8 +158,7 @@ def gen_loadtest_configs(
             metadata['name'] = name
             if 'labels' not in metadata:
                 metadata['labels'] = dict()
-            metadata['labels']['language'] = label_language(
-                language_config.language)
+            metadata['labels']['language'] = safe_name(language_config.language)
             metadata['labels']['prefix'] = prefix
             if 'annotations' not in metadata:
                 metadata['annotations'] = dict()
@@ -191,7 +189,7 @@ def gen_loadtest_configs(
                          'unique names, name counts for language %s: %s') %
                         (cl, c.most_common()))
 
-            # Name client instances with an index starting from 0.
+            # Name client instances with an index starting from zero.
             client_instances = []
             for i in range(instances_per_client):
                 client_instances.extend(copy.deepcopy(clients))
@@ -219,12 +217,21 @@ def gen_loadtest_configs(
             # Set servers to named instances.
             spec['servers'] = servers
 
-            # Name driver with an index for consistency with workers.
+            # Add driver, if needed.
             if 'driver' not in spec:
                 spec['driver'] = dict()
+
+            # Ensure driver has language and run fields.
             driver = spec['driver']
-            driver['language'] = 'cxx'
-            driver['name'] = component_name((driver.get('name', ''), str(i)))
+            if 'language' not in driver:
+                driver['language'] = safe_name('c++')
+            if 'run' not in driver:
+                driver['run'] = dict()
+
+            # Name the driver with an index for consistency with workers.
+            # There is only one driver, so the index is zero.
+            if 'name' not in driver or not driver['name']:
+                driver['name'] = '0'
 
             spec['scenariosJSON'] = scenario_str
 
@@ -259,12 +266,9 @@ def clear_empty_fields(config: Dict[str, Any]) -> None:
         driver = spec['driver']
         if 'pool' in driver and not driver['pool']:
             del driver['pool']
-        if 'run' in driver and 'image' not in driver['run']:
-            del driver['run']
-        if not set(driver).difference({'language'}):
-            del spec['driver']
-        else:
-            spec['driver'] = driver
+        if ('run' in driver and 'image' in driver['run'] and
+                not driver['run']['image']):
+            del driver['run']['image']
     if 'results' in spec and not ('bigQueryTable' in spec['results'] and
                                   spec['results']['bigQueryTable']):
         del spec['results']
@@ -280,15 +284,6 @@ def config_dumper(header_comment: str) -> Type[yaml.SafeDumper]:
             if isinstance(self.event, yaml.StreamStartEvent):
                 self.write_indent()
                 self.write_indicator(header_comment, need_whitespace=False)
-
-        def expect_block_sequence(self):
-            super().expect_block_sequence()
-            self.increase_indent()
-
-        def expect_block_sequence_item(self, first=False):
-            if isinstance(self.event, yaml.SequenceEndEvent):
-                self.indent = self.indents.pop()
-            super().expect_block_sequence_item(first)
 
     def str_presenter(dumper, data):
         if '\n' in data:
@@ -390,7 +385,17 @@ def main() -> None:
     if args.runs_per_test < 1:
         argp.error('runs_per_test must be greater than zero.')
 
-    substitutions = parse_key_value_args(args.substitutions)
+    # Config generation ignores environment variables that are passed by the
+    # controller at runtime.
+    substitutions = {
+        'DRIVER_PORT': '${DRIVER_PORT}',
+        'KILL_AFTER': '${KILL_AFTER}',
+        'POD_TIMEOUT': '${POD_TIMEOUT}',
+    }
+
+    # The user can override the ignored variables above by passing them in as
+    # substitution keys.
+    substitutions.update(parse_key_value_args(args.substitutions))
 
     uniquifier_elements = args.uniquifier_elements
     if args.d:
